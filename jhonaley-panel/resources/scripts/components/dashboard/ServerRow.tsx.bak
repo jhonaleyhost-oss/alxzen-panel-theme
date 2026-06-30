@@ -1,0 +1,181 @@
+import React, { memo, useEffect, useRef, useState } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faMicrochip, faMemory, faHdd, faNetworkWired, faTerminal } from '@fortawesome/free-solid-svg-icons';
+import { Link } from 'react-router-dom';
+import { Server } from '@/api/server/getServer';
+import getServerResourceUsage, { ServerStats } from '@/api/server/getServerResourceUsage';
+import { bytesToString, ip } from '@/lib/formatters';
+import tw, { styled } from 'twin.macro';
+import Spinner from '@/components/elements/Spinner';
+import isEqual from 'react-fast-compare';
+
+const CardWrapper = styled(Link)`
+    ${tw`relative block w-full h-[220px] rounded-[30px] transition-all duration-500`}
+    /* Base Background - Darker for visibility */
+    background: rgba(5, 5, 10, 0.85); 
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transform-style: preserve-3d;
+    perspective: 1000px;
+
+    /* Shadow & Glow */
+    box-shadow: 0 10px 40px -10px rgba(0,0,0,0.8);
+
+    &:hover {
+        transform: translateY(-5px) scale(1.02);
+        box-shadow: 
+            0 20px 60px -10px rgba(0,0,0,0.9),
+            0 0 30px rgba(79, 70, 229, 0.2); /* Indigo Glow */
+        border-color: rgba(99, 102, 241, 0.5);
+    }
+
+    /* Status Bar Line */
+    &::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 4px;
+        background: linear-gradient(90deg, #4f46e5, #ec4899);
+        opacity: 0.5;
+    }
+`;
+
+const Content = styled.div`
+    ${tw`relative z-20 h-full p-6 flex flex-col justify-between`}
+`;
+
+const ServerName = styled.h3`
+    ${tw`text-2xl font-black text-white tracking-tight mb-1`}
+    text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+`;
+
+const StatusDot = styled.div<{ $status: string }>`
+    ${tw`flex items-center gap-2 px-3 py-1 rounded-lg bg-black/40 border border-white/5`}
+    
+    .indicator {
+        ${tw`w-2 h-2 rounded-full shadow-[0_0_8px_currentColor]`}
+        background-color: ${({ $status }) => 
+            $status === 'running' ? '#4ade80' : 
+            $status === 'offline' ? '#f87171' : '#facc15'};
+        animation: pulse 1.5s infinite;
+    }
+
+    span {
+        ${tw`text-[10px] font-bold uppercase tracking-widest`}
+        color: ${({ $status }) => 
+            $status === 'running' ? '#4ade80' : 
+            $status === 'offline' ? '#f87171' : '#facc15'};
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.5; transform: scale(1.2); }
+    }
+`;
+
+const StatItem = styled.div`
+    ${tw`flex flex-col gap-1`}
+    
+    .label {
+        ${tw`flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest`}
+    }
+
+    .value {
+        ${tw`text-base font-mono font-medium text-white`}
+        text-shadow: 0 0 10px rgba(255,255,255,0.2);
+    }
+`;
+
+const RadialProgress = styled.div<{ $percent: number; $color: string }>`
+    ${tw`relative w-full h-1 bg-gray-800 rounded-full overflow-hidden mt-1`}
+    
+    div {
+        ${tw`absolute top-0 left-0 h-full transition-all duration-1000 ease-out`}
+        width: ${props => props.$percent}%;
+        background: ${props => props.$color};
+        box-shadow: 0 0 10px ${props => props.$color};
+    }
+`;
+
+export default memo(({ server, className }: { server: Server; className?: string }) => {
+    const interval = useRef<any>(null);
+    const [stats, setStats] = useState<ServerStats | null>(null);
+
+    const getStats = () =>
+        getServerResourceUsage(server.uuid)
+            .then((data) => setStats(data))
+            .catch(() => {});
+
+    useEffect(() => {
+        getStats();
+        interval.current = setInterval(getStats, 30000);
+        return () => clearInterval(interval.current);
+    }, []);
+
+    const status = stats?.status || (server.status === 'installing' ? 'starting' : 'offline');
+    const isRunning = status === 'running';
+
+    return (
+        <CardWrapper to={`/server/${server.id}`} className={className}>
+            <Content>
+                {/* Header */}
+                <div css={tw`flex justify-between items-start`}>
+                    <div css={tw`flex items-center gap-4`}>
+                        <div css={tw`w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center border border-white/10 text-indigo-300`}>
+                            <FontAwesomeIcon icon={faTerminal} size="lg" />
+                        </div>
+                        <div>
+                            <ServerName>{server.name}</ServerName>
+                            <code css={tw`text-xs text-gray-400 font-mono flex items-center gap-2`}>
+                                <FontAwesomeIcon icon={faNetworkWired} />
+                                {server.allocations.find(a => a.isDefault)?.alias || ip(server.allocations.find(a => a.isDefault)?.ip || '')}
+                            </code>
+                        </div>
+                    </div>
+                    <StatusDot $status={status}>
+                        <div className="indicator" />
+                        <span>{status}</span>
+                    </StatusDot>
+                </div>
+
+                {/* Stats */}
+                <div css={tw`grid grid-cols-3 gap-6 mt-auto bg-black/20 p-4 rounded-xl border border-white/5`}>
+                    {!stats && isRunning ? (
+                        <div css={tw`col-span-3 flex justify-center`}>
+                            <Spinner size={'small'} />
+                        </div>
+                    ) : !isRunning ? (
+                        <div css={tw`col-span-3 text-center text-xs text-gray-500 font-mono`}>
+                            SERVER OFFLINE
+                        </div>
+                    ) : (
+                        <>
+                            <StatItem>
+                                <div className="label"><FontAwesomeIcon icon={faMicrochip} /> CPU</div>
+                                <div className="value">{stats!.cpuUsagePercent.toFixed(1)}%</div>
+                                <RadialProgress $percent={Math.min(stats!.cpuUsagePercent, 100)} $color="#60a5fa" >
+                                    <div />
+                                </RadialProgress>
+                            </StatItem>
+                            <StatItem>
+                                <div className="label"><FontAwesomeIcon icon={faMemory} /> MEM</div>
+                                <div className="value">{bytesToString(stats!.memoryUsageInBytes)}</div>
+                                <RadialProgress $percent={(stats!.memoryUsageInBytes / (server.limits.memory * 1024 * 1024)) * 100} $color="#c084fc" >
+                                    <div />
+                                </RadialProgress>
+                            </StatItem>
+                            <StatItem>
+                                <div className="label"><FontAwesomeIcon icon={faHdd} /> DISK</div>
+                                <div className="value">{bytesToString(stats!.diskUsageInBytes)}</div>
+                                <RadialProgress $percent={(stats!.diskUsageInBytes / (server.limits.disk * 1024 * 1024)) * 100} $color="#f472b6" >
+                                    <div />
+                                </RadialProgress>
+                            </StatItem>
+                        </>
+                    )}
+                </div>
+            </Content>
+        </CardWrapper>
+    );
+}, isEqual);

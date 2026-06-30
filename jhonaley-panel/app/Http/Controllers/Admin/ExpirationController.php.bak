@@ -1,0 +1,51 @@
+<?php
+
+namespace Pterodactyl\Http\Controllers\Admin;
+
+use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Pterodactyl\Models\Server;
+use Pterodactyl\Http\Controllers\Controller;
+
+class ExpirationController extends Controller
+{
+    public function index()
+{
+    $servers = Server::query()
+        // 'status' aman digunakan karena ada di model kamu baris 42
+        ->select('id', 'name', 'expires_at', 'uuidShort', 'status', 'owner_id', 'node_id', 'allocation_id')
+        ->with(['user', 'node', 'allocation'])
+        ->paginate(50);
+
+    return view('admin.expiration.index', compact('servers'));
+}
+public function update(Request $request, $id)
+{
+    $server = Server::findOrFail($id);
+
+    $request->validate([
+        'new_date' => 'nullable|date',
+    ]);
+
+    if ($request->filled('new_date')) {
+        $newDate = Carbon::parse($request->input('new_date'))->endOfDay();
+    } else {
+        $days = 30;
+        // Pastikan expires_at sudah di-cast sebagai datetime di Model
+        if ($server->expires_at && $server->expires_at->isFuture()) {
+            $newDate = $server->expires_at->addDays($days);
+        } else {
+            $newDate = Carbon::now()->addDays($days);
+        }
+    }
+
+    $server->update([
+        'expires_at' => $newDate,
+        // Opsional: Kalau server sudah expired lalu diperpanjang, 
+        // mungkin kamu mau otomatis buka suspend-nya?
+        // 'suspended' => 0, 
+    ]);
+
+    return redirect()->back()->with('success', "Server {$server->name} berhasil diperpanjang sampai {$newDate->format('d-m-Y')}.");
+}
+}
