@@ -239,21 +239,25 @@ fi
 
 # Pastikan node_modules ada
 info "Install yarn dependencies..."
+YARN_LOG="$BACKUP_DIR/yarn-install-$TS.log"
+info "Log live juga disimpan di $YARN_LOG"
 set +e
-yarn install 2>&1 | tail -20
+timeout 30m yarn install --network-timeout 600000 --frozen-lockfile 2>&1 | tee "$YARN_LOG"
 YARN_INSTALL_EXIT=${PIPESTATUS[0]}
 set -e
-[ $YARN_INSTALL_EXIT -eq 0 ] || err "yarn install gagal (exit $YARN_INSTALL_EXIT). Cek log di atas. Restore: tar -xzf $BK_FILES -C /var/www/"
+[ $YARN_INSTALL_EXIT -eq 0 ] || err "yarn install gagal/timeout (exit $YARN_INSTALL_EXIT). Cek log: $YARN_LOG. Restore: tar -xzf $BK_FILES -C /var/www/"
 
 info "Building production bundle (3-8 menit)..."
+BUILD_LOG="$BACKUP_DIR/yarn-build-$TS.log"
+info "Log live juga disimpan di $BUILD_LOG"
 set +e
-NODE_OPTIONS="--max-old-space-size=2048" yarn build:production 2>&1 | tail -30
+timeout 30m env NODE_OPTIONS="--max-old-space-size=2048" yarn build:production 2>&1 | tee "$BUILD_LOG"
 BUILD_EXIT=${PIPESTATUS[0]}
 set -e
 if [ $BUILD_EXIT -eq 0 ]; then
     ok "Build sukses."
 else
-    err "Build gagal (exit $BUILD_EXIT). Restore: cd /var/www && rm -rf pterodactyl && tar -xzf $BK_FILES"
+    err "Build gagal/timeout (exit $BUILD_EXIT). Cek log: $BUILD_LOG. Restore: cd /var/www && rm -rf pterodactyl && tar -xzf $BK_FILES"
 fi
 
 # ─── Step 6: Clear cache + permission ────────────────────────────────────────
