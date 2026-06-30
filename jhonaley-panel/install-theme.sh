@@ -40,7 +40,7 @@ step "STEP 0  Pre-flight check"
 [ -f "$PANEL_DIR/artisan" ] || err "$PANEL_DIR bukan Pterodactyl panel (artisan tidak ada)."
 [ -d "$THEME_DIR/resources/scripts" ] || err "Theme source tidak ditemukan di $THEME_DIR."
 command -v php  >/dev/null || err "PHP tidak terinstall."
-command -v yarn >/dev/null || err "Yarn tidak terinstall. Install: 'npm install -g yarn'."
+command -v yarn >/dev/null || warn "Yarn belum terinstall — akan dipasang otomatis saat Step 5."
 command -v mysqldump >/dev/null || warn "mysqldump tidak ada — DB backup di-skip."
 ok "Panel: $PANEL_DIR"
 ok "Theme: $THEME_DIR"
@@ -184,17 +184,37 @@ NODE_VER=$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1 || echo 0)
 if [ "${NODE_VER:-0}" -lt 22 ]; then
     warn "Node.js versi terlalu lama (v$NODE_VER). Install Node.js 22 LTS..."
     set +e
+    # Ubuntu/Debian Node.js 12 sering konflik dengan NodeSource Node.js 22
+    # (contoh: libnode-dev memiliki /usr/include/node/common.gypi).
+    # Bersihkan paket Node lama dulu supaya dpkg tidak gagal overwrite.
+    apt-get remove -y libnode-dev nodejs npm nodejs-doc >/dev/null 2>&1
+    dpkg --configure -a >/dev/null 2>&1
+    apt-get -f install -y >/dev/null 2>&1
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
-    npm install -g yarn
-    NODE_INSTALL_EXIT=$?
+    NODE_APT_EXIT=$?
+    hash -r
+    if [ $NODE_APT_EXIT -eq 0 ] && command -v npm >/dev/null; then
+        npm install -g yarn
+        YARN_GLOBAL_EXIT=$?
+    else
+        YARN_GLOBAL_EXIT=1
+    fi
     set -e
     NEW_NODE=$(node -v 2>/dev/null || echo "none")
     NEW_VER=$(echo "$NEW_NODE" | sed 's/v//' | cut -d. -f1)
     if [ "${NEW_VER:-0}" -lt 22 ]; then
-        err "Install Node.js 22 gagal (current: $NEW_NODE). Install manual: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash - && sudo apt-get install -y nodejs"
+        err "Install Node.js 22 gagal (current: $NEW_NODE). Jalankan manual: sudo apt-get remove -y libnode-dev nodejs npm nodejs-doc && curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash - && sudo apt-get install -y nodejs"
+    fi
+    if [ $YARN_GLOBAL_EXIT -ne 0 ] || ! command -v yarn >/dev/null; then
+        err "Node.js $NEW_NODE terinstall, tapi install Yarn gagal. Jalankan manual: sudo npm install -g yarn"
     fi
     ok "Node.js $NEW_NODE terinstall."
+fi
+
+if ! command -v yarn >/dev/null; then
+    info "Yarn belum ada, install via npm..."
+    npm install -g yarn >/dev/null 2>&1 || err "Install Yarn gagal. Jalankan manual: sudo npm install -g yarn"
 fi
 
 # Pastikan node_modules ada
