@@ -90,7 +90,7 @@ fi
 # ─── Step 2: Maintenance mode ────────────────────────────────────────────────
 step "STEP 2  Maintenance mode"
 cd "$PANEL_DIR"
-php artisan down --message="Theme upgrade in progress" --retry=60 || true
+php artisan down --retry=60 >/dev/null 2>&1 || php artisan down >/dev/null 2>&1 || true
 systemctl stop pteroq.service 2>/dev/null || true
 ok "Panel dalam maintenance mode."
 
@@ -128,16 +128,16 @@ info "Branding (app name + author)..."
 copy_if_exists "$THEME_DIR/config/app.php" "$PANEL_DIR/config/app.php"
 
 # Custom features (Expiration + Root Protection + Branded version service)
-info "Custom features (Expiration + Root Protection)..."
-copy_if_exists "$THEME_DIR/app/Http/Controllers/Admin/ExpirationController.php" \
-               "$PANEL_DIR/app/Http/Controllers/Admin/ExpirationController.php"
-copy_if_exists "$THEME_DIR/app/Http/Controllers/Admin/UserController.php" \
-               "$PANEL_DIR/app/Http/Controllers/Admin/UserController.php"
-copy_if_exists "$THEME_DIR/app/Console/Commands/CheckServerExpirations.php" \
-               "$PANEL_DIR/app/Console/Commands/CheckServerExpirations.php"
+info "Backend controllers + services + routes..."
+# Copy SELURUH app/ supaya semua controller yang direferensikan routes/admin.php tersedia
+# (NodeSystemUsageController, ExpirationController, dll)
+copy_if_exists "$THEME_DIR/app/Http/Controllers/Admin" "$PANEL_DIR/app/Http/Controllers/"
+copy_if_exists "$THEME_DIR/app/Console/Commands" "$PANEL_DIR/app/Console/"
 copy_if_exists "$THEME_DIR/app/Services/Helpers/SoftwareVersionService.php" \
                "$PANEL_DIR/app/Services/Helpers/SoftwareVersionService.php"
 copy_if_exists "$THEME_DIR/routes/admin.php" "$PANEL_DIR/routes/admin.php"
+# Bersihkan file .bak yg ikut ke-copy
+find "$PANEL_DIR/app/Http/Controllers/Admin" -name "*.bak" -delete 2>/dev/null || true
 
 # Migrations untuk fitur Expiration
 info "Migrations..."
@@ -157,17 +157,33 @@ step "STEP 5  Rebuild frontend (yarn build:production)"
 warn "Step ini butuh 3-8 menit. RAM minimal 2GB."
 cd "$PANEL_DIR"
 
-# Pastikan node_modules ada
-if [ ! -d node_modules ] || [ ! -d node_modules/.bin ]; then
-    info "Install yarn dependencies dulu..."
-    yarn install --frozen-lockfile 2>&1 | tail -5
+# ─── Pastikan Node.js versi cukup (theme butuh Node >= 22) ───────────────────
+NODE_VER=$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1 || echo 0)
+if [ "${NODE_VER:-0}" -lt 22 ]; then
+    warn "Node.js versi terlalu lama (v$NODE_VER). Install Node.js 22 LTS..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
+    apt-get install -y nodejs >/dev/null 2>&1
+    npm install -g yarn >/dev/null 2>&1
+    ok "Node.js $(node -v) terinstall."
 fi
 
-info "Building production bundle..."
-if NODE_OPTIONS="--max-old-space-size=2048" yarn build:production 2>&1 | tail -15; then
+# Pastikan node_modules ada
+info "Install yarn dependencies..."
+set +e
+yarn install 2>&1 | tail -20
+YARN_INSTALL_EXIT=${PIPESTATUS[0]}
+set -e
+[ $YARN_INSTALL_EXIT -eq 0 ] || err "yarn install gagal (exit $YARN_INSTALL_EXIT). Cek log di atas. Restore: tar -xzf $BK_FILES -C /var/www/"
+
+info "Building production bundle (3-8 menit)..."
+set +e
+NODE_OPTIONS="--max-old-space-size=2048" yarn build:production 2>&1 | tail -30
+BUILD_EXIT=${PIPESTATUS[0]}
+set -e
+if [ $BUILD_EXIT -eq 0 ]; then
     ok "Build sukses."
 else
-    err "Build gagal. Cek log di atas. Restore backup dengan: tar -xzf $BK_FILES -C /var/www/"
+    err "Build gagal (exit $BUILD_EXIT). Restore: cd /var/www && rm -rf pterodactyl && tar -xzf $BK_FILES"
 fi
 
 # ─── Step 6: Clear cache + permission ────────────────────────────────────────
