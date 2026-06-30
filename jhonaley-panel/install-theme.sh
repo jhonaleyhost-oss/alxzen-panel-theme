@@ -180,18 +180,38 @@ warn "Step ini butuh 3-8 menit. RAM minimal 2GB."
 cd "$PANEL_DIR"
 
 # ─── Pastikan Node.js versi cukup (theme butuh Node >= 22) ───────────────────
-NODE_VER=$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1 || echo 0)
+NODE_RAW=$(node -v 2>/dev/null || echo "")
+NODE_VER=$(echo "$NODE_RAW" | sed 's/v//' | cut -d. -f1)
+[ -z "$NODE_VER" ] && NODE_VER=0
 if [ "${NODE_VER:-0}" -lt 22 ]; then
-    warn "Node.js versi terlalu lama (v$NODE_VER). Install Node.js 22 LTS..."
+    if [ -z "$NODE_RAW" ]; then
+        warn "Node.js belum terinstall. Install Node.js 22 LTS..."
+    else
+        warn "Node.js versi terlalu lama ($NODE_RAW). Install Node.js 22 LTS..."
+    fi
     set +e
+    # Tunggu apt lock (unattended-upgrades sering jalan di background)
+    info "Menunggu apt lock bebas (max 180 detik)..."
+    for i in $(seq 1 60); do
+        if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+           && ! fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+           && ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+            break
+        fi
+        sleep 3
+    done
+    # Hentikan unattended-upgrades sementara supaya tidak balik kunci
+    systemctl stop unattended-upgrades >/dev/null 2>&1 || true
+    systemctl stop apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true
+    killall -9 unattended-upgr >/dev/null 2>&1 || true
     # Ubuntu/Debian Node.js 12 sering konflik dengan NodeSource Node.js 22
     # (contoh: libnode-dev memiliki /usr/include/node/common.gypi).
     # Bersihkan paket Node lama dulu supaya dpkg tidak gagal overwrite.
-    apt-get remove -y libnode-dev nodejs npm nodejs-doc >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y libnode-dev nodejs npm nodejs-doc >/dev/null 2>&1
     dpkg --configure -a >/dev/null 2>&1
-    apt-get -f install -y >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get -f install -y >/dev/null 2>&1
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y nodejs
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
     NODE_APT_EXIT=$?
     hash -r
     if [ $NODE_APT_EXIT -eq 0 ] && command -v npm >/dev/null; then
