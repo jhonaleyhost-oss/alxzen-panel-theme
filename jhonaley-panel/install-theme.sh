@@ -273,6 +273,62 @@ chown -R www-data:www-data "$PANEL_DIR"
 chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
 ok "Permission set ke www-data."
 
+# ─── Step 6.5: Announcement banner (safe, no model dependency) ───────────────
+step "STEP 6.5  Setup announcement banner (safe mode)"
+cd "$PANEL_DIR"
+
+DB_HOST_ENV=$(grep -E '^DB_HOST='     .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
+DB_PORT_ENV=$(grep -E '^DB_PORT='     .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
+DB_NAME_ENV=$(grep -E '^DB_DATABASE=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
+DB_USER_ENV=$(grep -E '^DB_USERNAME=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
+DB_PASS_ENV=$(grep -E '^DB_PASSWORD=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
+DB_HOST_ENV=${DB_HOST_ENV:-127.0.0.1}
+DB_PORT_ENV=${DB_PORT_ENV:-3306}
+
+MYSQL_CMD=(mysql -h "$DB_HOST_ENV" -P "$DB_PORT_ENV" -u "${DB_USER_ENV:-$DB_USER}")
+[ -n "$DB_PASS_ENV" ] && MYSQL_CMD+=(-p"$DB_PASS_ENV")
+MYSQL_CMD+=("${DB_NAME_ENV:-$DB_NAME}")
+
+HAS_TABLE=$("${MYSQL_CMD[@]}" -N -B -e "SHOW TABLES LIKE 'announcements';" 2>/dev/null | wc -l)
+if [ "${HAS_TABLE:-0}" -eq 0 ]; then
+    warn "Tabel 'announcements' belum ada. Banner di-skip (tidak akan menyebabkan 500)."
+else
+    HAS_TYPE=$("${MYSQL_CMD[@]}" -N -B -e "SHOW COLUMNS FROM announcements LIKE 'type';" 2>/dev/null | wc -l)
+    if [ "${HAS_TYPE:-0}" -eq 0 ]; then
+        "${MYSQL_CMD[@]}" -e "ALTER TABLE announcements ADD COLUMN type VARCHAR(20) NOT NULL DEFAULT 'info' AFTER content;" 2>/dev/null \
+            && ok "Kolom 'type' ditambahkan ke tabel announcements." \
+            || warn "Gagal ALTER announcements — banner tetap dipasang (tanpa warna type)."
+    fi
+
+    PARTIAL_DIR="$PANEL_DIR/resources/views/partials"
+    PARTIAL_FILE="$PARTIAL_DIR/announcements.blade.php"
+    mkdir -p "$PARTIAL_DIR"
+    # Partial pakai DB facade langsung — TIDAK butuh Model Announcement.
+    # Semua akses dibungkus try/catch → apapun errornya, tidak akan 500.
+    PARTIAL_B64='QHBocAogICAgdHJ5IHsKICAgICAgICAkX19hbm4gPSBcSWxsdW1pbmF0ZVxTdXBwb3J0XEZhY2FkZXNcREI6OnRhYmxlKCdhbm5vdW5jZW1lbnRzJykKICAgICAgICAgICAgLT53aGVyZShmdW5jdGlvbigkcSkgewogICAgICAgICAgICAgICAgaWYgKFxJbGx1bWluYXRlXFN1cHBvcnRcRmFjYWRlc1xTY2hlbWE6Omhhc0NvbHVtbignYW5ub3VuY2VtZW50cycsICdhY3RpdmUnKSkgewogICAgICAgICAgICAgICAgICAgICRxLT53aGVyZSgnYWN0aXZlJywgMSk7CiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0pCiAgICAgICAgICAgIC0+b3JkZXJCeURlc2MoJ2NyZWF0ZWRfYXQnKQogICAgICAgICAgICAtPmxpbWl0KDUpCiAgICAgICAgICAgIC0+Z2V0KCk7CiAgICB9IGNhdGNoIChcVGhyb3dhYmxlICRlKSB7CiAgICAgICAgJF9fYW5uID0gY29sbGVjdCgpOwogICAgfQpAZW5kcGhwCkBpZigkX19hbm4gJiYgJF9fYW5uLT5jb3VudCgpKQo8ZGl2IHN0eWxlPSJwb3NpdGlvbjpzdGlja3k7dG9wOjA7ei1pbmRleDo5OTk5OyI+CkBmb3JlYWNoKCRfX2FubiBhcyAkYSkKICAgIEBwaHAKICAgICAgICAkdHlwZSA9ICRhLT50eXBlID8/ICdpbmZvJzsKICAgICAgICAkYmcgPSAkdHlwZSA9PT0gJ2NyaXRpY2FsJyA/ICcjYzAzOTJiJyA6ICgkdHlwZSA9PT0gJ3dhcm5pbmcnID8gJyNkMzU0MDAnIDogJyMyOTgwYjknKTsKICAgIEBlbmRwaHAKICAgIDxkaXYgc3R5bGU9ImJhY2tncm91bmQ6e3sgJGJnIH19O2NvbG9yOiNmZmY7cGFkZGluZzo4cHggMTZweDtmb250LXNpemU6MTRweDsiPgogICAgICAgIDxzdHJvbmc+e3sgJGEtPnRpdGxlIH19PC9zdHJvbmc+CiAgICAgICAgPHNwYW4gc3R5bGU9Im9wYWNpdHk6Ljk7bWFyZ2luLWxlZnQ6OHB4OyI+e3sgJGEtPmNvbnRlbnQgfX08L3NwYW4+CiAgICA8L2Rpdj4KQGVuZGZvcmVhY2gKPC9kaXY+CkBlbmRpZgo='
+    echo "$PARTIAL_B64" | base64 -d > "$PARTIAL_FILE"
+    ok "Partial ditulis: resources/views/partials/announcements.blade.php"
+
+    WRAPPER="$PANEL_DIR/resources/views/templates/wrapper.blade.php"
+    if [ -f "$WRAPPER" ]; then
+        if grep -q "partials.announcements" "$WRAPPER"; then
+            ok "Wrapper sudah include partials.announcements — skip."
+        else
+            cp -f "$WRAPPER" "$WRAPPER.bak-ann-$TS"
+            sed -i '0,/<div id="app"/s//@include('"'"'partials.announcements'"'"')\n        <div id="app"/' "$WRAPPER" \
+                && ok "Wrapper di-inject @include('partials.announcements')." \
+                || warn "Gagal inject wrapper — cek manual: $WRAPPER"
+        fi
+        chown www-data:www-data "$WRAPPER" "$PARTIAL_FILE" 2>/dev/null || true
+    else
+        warn "wrapper.blade.php tidak ditemukan — banner tidak akan muncul."
+    fi
+
+    php artisan view:clear    >/dev/null 2>&1 || true
+    php artisan optimize:clear >/dev/null 2>&1 || true
+    ok "Announcement banner siap (aman, tidak akan 500)."
+fi
+
 # ─── Step 7: Restart services + maintenance off ──────────────────────────────
 step "STEP 7  Restart services"
 systemctl start pteroq.service       2>/dev/null && ok "pteroq.service started"  || warn "pteroq.service skip"
