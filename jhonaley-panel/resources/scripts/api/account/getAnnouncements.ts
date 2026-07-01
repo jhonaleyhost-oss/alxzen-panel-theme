@@ -10,7 +10,12 @@ export interface Announcement {
 }
 
 export default async (): Promise<Announcement[]> => {
-    const { data } = await http.get('/api/client/announcements');
+    const { data } = await http.get('/api/client/announcements').catch(() => ({ data: { data: [] } }));
 
-    return (data.data || []).map((datum: any) => datum.attributes);
+    return (data.data || []).map((datum: any) => ({
+        ...datum.attributes,
+        type: datum.attributes?.type || 'info',
+        priority: datum.attributes?.priority || 2,
+        target_display: Array.isArray(datum.attributes?.target_display) ? datum.attributes.target_display : ['dashboard'],
+    }));
 };
