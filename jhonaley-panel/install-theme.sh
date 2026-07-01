@@ -139,12 +139,22 @@ copy_if_exists "$THEME_DIR/routes" "$PANEL_DIR/"
 # Bersihkan file .bak yang ikut ter-copy
 find "$PANEL_DIR/app" -name "*.bak" -delete 2>/dev/null || true
 
-# Migrations untuk fitur Expiration
-info "Migrations..."
-if ls "$THEME_DIR/database/migrations/"*expiration* >/dev/null 2>&1; then
-    cp -f "$THEME_DIR/database/migrations/"*expiration* "$PANEL_DIR/database/migrations/"
-    ok "→ migrations/*expiration*"
+# Migrations — copy semua migration dari theme yang belum ada di panel.
+# Laravel aman: yang sudah pernah dijalankan (tercatat di tabel migrations)
+# akan di-skip otomatis pas `php artisan migrate`.
+info "Migrations (announcements, expiration, dll)..."
+MIG_COUNT=0
+if [ -d "$THEME_DIR/database/migrations" ]; then
+    for m in "$THEME_DIR/database/migrations/"*.php; do
+        [ -e "$m" ] || continue
+        dst="$PANEL_DIR/database/migrations/$(basename "$m")"
+        if [ ! -f "$dst" ]; then
+            cp -f "$m" "$dst"
+            MIG_COUNT=$((MIG_COUNT+1))
+        fi
+    done
 fi
+ok "→ $MIG_COUNT migration baru disalin"
 
 # ─── Step 4: DB migration ────────────────────────────────────────────────────
 step "STEP 4  Database migration"
