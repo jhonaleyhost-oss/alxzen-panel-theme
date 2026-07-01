@@ -11,8 +11,10 @@ return new class extends Migration
      */
     public function up()
     {
+        if (Schema::hasColumn('servers', 'expires_at')) {
+            return; // sudah ada, skip (idempotent)
+        }
         Schema::table('servers', function (Blueprint $table) {
-            // Menggunakan after('uuid') karena kolom uuid pasti ada di Pterodactyl
             $table->timestamp('expires_at')->nullable()->after('uuid');
         });
     }
@@ -22,6 +24,9 @@ return new class extends Migration
      */
     public function down()
     {
+        if (!Schema::hasColumn('servers', 'expires_at')) {
+            return;
+        }
         Schema::table('servers', function (Blueprint $table) {
             $table->dropColumn('expires_at');
         });
