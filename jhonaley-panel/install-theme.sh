@@ -127,24 +127,34 @@ copy_if_exists "$THEME_DIR/public/favicon.png" "$PANEL_DIR/public/favicon.png"
 info "Branding (app name + author)..."
 copy_if_exists "$THEME_DIR/config/app.php" "$PANEL_DIR/config/app.php"
 
-# Custom features (Expiration + Root Protection + Branded version service)
-info "Backend controllers + services + routes..."
-# Copy SELURUH app/ supaya semua controller yang direferensikan routes/admin.php tersedia
-# (NodeSystemUsageController, ExpirationController, dll)
-copy_if_exists "$THEME_DIR/app/Http/Controllers/Admin" "$PANEL_DIR/app/Http/Controllers/"
-copy_if_exists "$THEME_DIR/app/Console/Commands" "$PANEL_DIR/app/Console/"
-copy_if_exists "$THEME_DIR/app/Services/Helpers/SoftwareVersionService.php" \
-               "$PANEL_DIR/app/Services/Helpers/SoftwareVersionService.php"
-copy_if_exists "$THEME_DIR/routes/admin.php" "$PANEL_DIR/routes/admin.php"
-# Bersihkan file .bak yg ikut ke-copy
-find "$PANEL_DIR/app/Http/Controllers/Admin" -name "*.bak" -delete 2>/dev/null || true
+# Custom features (Announcement, Expiration, Mount, Location, Nest, Node, dll)
+# PENTING: overlay SELURUH app/ + routes/ — theme ini fork Pterodactyl,
+# jadi Models / Requests / Services / Transformers / Repositories yang
+# direferensikan controller & routes HARUS ikut ter-copy. Kalau tidak,
+# muncul "Class Pterodactyl\Models\Announcement not found" dan 500 error
+# di halaman admin (nodes, location, mount, nest, announcement, dll).
+info "Backend overlay: seluruh app/ + routes/..."
+copy_if_exists "$THEME_DIR/app"    "$PANEL_DIR/"
+copy_if_exists "$THEME_DIR/routes" "$PANEL_DIR/"
+# Bersihkan file .bak yang ikut ter-copy
+find "$PANEL_DIR/app" -name "*.bak" -delete 2>/dev/null || true
 
-# Migrations untuk fitur Expiration
-info "Migrations..."
-if ls "$THEME_DIR/database/migrations/"*expiration* >/dev/null 2>&1; then
-    cp -f "$THEME_DIR/database/migrations/"*expiration* "$PANEL_DIR/database/migrations/"
-    ok "→ migrations/*expiration*"
+# Migrations — copy semua migration dari theme yang belum ada di panel.
+# Laravel aman: yang sudah pernah dijalankan (tercatat di tabel migrations)
+# akan di-skip otomatis pas `php artisan migrate`.
+info "Migrations (announcements, expiration, dll)..."
+MIG_COUNT=0
+if [ -d "$THEME_DIR/database/migrations" ]; then
+    for m in "$THEME_DIR/database/migrations/"*.php; do
+        [ -e "$m" ] || continue
+        dst="$PANEL_DIR/database/migrations/$(basename "$m")"
+        if [ ! -f "$dst" ]; then
+            cp -f "$m" "$dst"
+            MIG_COUNT=$((MIG_COUNT+1))
+        fi
+    done
 fi
+ok "→ $MIG_COUNT migration baru disalin"
 
 # ─── Step 4: DB migration ────────────────────────────────────────────────────
 step "STEP 4  Database migration"
