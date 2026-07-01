@@ -6,6 +6,7 @@ use Illuminate\View\View;
 use Illuminate\Http\Request;
 use Pterodactyl\Models\Announcement;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Schema;
 use Prologue\Alerts\AlertsMessageBag;
 use Pterodactyl\Http\Controllers\Controller;
 
@@ -29,9 +30,15 @@ class AnnouncementController extends Controller
      */
     public function index(): View
     {
-        $announcements = Announcement::with('author')
-            ->orderBy('created_at', 'desc')
-            ->paginate(15);
+        $query = Announcement::with('author');
+
+        if (Schema::hasColumn('announcements', 'created_at')) {
+            $query->orderBy('created_at', 'desc');
+        } else {
+            $query->orderBy('id', 'desc');
+        }
+
+        $announcements = $query->paginate(15);
 
         return view('admin.announcements.index', ['announcements' => $announcements]);
     }

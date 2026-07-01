@@ -12,7 +12,9 @@ THEME_DIR="${THEME_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 BACKUP_DIR="${BACKUP_DIR:-/root/pterodactyl-backups}"
 DB_NAME="${DB_NAME:-panel}"
 DB_USER="${DB_USER:-pterodactyl}"
-PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php8.1-fpm}"
+DB_HOST="${DB_HOST:-127.0.0.1}"
+DB_PORT="${DB_PORT:-3306}"
+PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-}"
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
 R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; C='\033[0;36m'; N='\033[0m'
@@ -45,6 +47,32 @@ command -v mysqldump >/dev/null || warn "mysqldump tidak ada — DB backup di-sk
 ok "Panel: $PANEL_DIR"
 ok "Theme: $THEME_DIR"
 
+read_env_value() {
+    local key="$1" file="$PANEL_DIR/.env"
+    [ -f "$file" ] || return 0
+    grep -E "^${key}=" "$file" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"
+}
+
+if [ -f "$PANEL_DIR/.env" ]; then
+    DB_HOST="$(read_env_value DB_HOST || true)"; DB_HOST="${DB_HOST:-127.0.0.1}"
+    DB_PORT="$(read_env_value DB_PORT || true)"; DB_PORT="${DB_PORT:-3306}"
+    DB_NAME="$(read_env_value DB_DATABASE || true)"; DB_NAME="${DB_NAME:-panel}"
+    DB_USER="$(read_env_value DB_USERNAME || true)"; DB_USER="${DB_USER:-pterodactyl}"
+    DB_PASS="$(read_env_value DB_PASSWORD || true)"
+fi
+
+if [ -z "$PHP_FPM_SERVICE" ]; then
+    PHP_MINOR="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || true)"
+    if [ -n "$PHP_MINOR" ] && systemctl list-unit-files "php${PHP_MINOR}-fpm.service" >/dev/null 2>&1; then
+        PHP_FPM_SERVICE="php${PHP_MINOR}-fpm"
+    else
+        PHP_FPM_SERVICE="$(systemctl list-unit-files 'php*-fpm.service' 2>/dev/null | awk '/php[0-9].*-fpm\.service/ {sub(/\.service/,"",$1); print $1; exit}')"
+        PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php8.3-fpm}"
+    fi
+fi
+ok "Database: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+ok "PHP-FPM: $PHP_FPM_SERVICE"
+
 echo
 read -rp "  Lanjut install tema? Backup otomatis akan dibuat. [y/N] " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || { warn "Dibatalkan."; exit 0; }
@@ -75,11 +103,8 @@ fi
 
 if command -v mysqldump >/dev/null; then
     info "Backup database '$DB_NAME' → $BK_DB"
-    if [ -f "$PANEL_DIR/.env" ]; then
-        DB_PASS=$(grep -E '^DB_PASSWORD=' "$PANEL_DIR/.env" | cut -d= -f2- | tr -d '"' | tr -d "'")
-    fi
     if [ -n "$DB_PASS" ]; then
-        mysqldump -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null | gzip > "$BK_DB" \
+        mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" 2>/dev/null | gzip > "$BK_DB" \
             && ok "DB backup: $(du -h "$BK_DB" | cut -f1)" \
             || warn "DB backup gagal — lanjut tanpa DB backup."
     else
@@ -115,6 +140,9 @@ copy_if_exists "$THEME_DIR/tailwind.config.js"    "$PANEL_DIR/tailwind.config.js
 copy_if_exists "$THEME_DIR/babel.config.js"       "$PANEL_DIR/babel.config.js"
 copy_if_exists "$THEME_DIR/webpack.config.js"     "$PANEL_DIR/webpack.config.js"
 copy_if_exists "$THEME_DIR/postcss.config.js"     "$PANEL_DIR/postcss.config.js"
+copy_if_exists "$THEME_DIR/package.json"          "$PANEL_DIR/package.json"
+copy_if_exists "$THEME_DIR/yarn.lock"             "$PANEL_DIR/yarn.lock"
+copy_if_exists "$THEME_DIR/tsconfig.json"         "$PANEL_DIR/tsconfig.json"
 
 # Assets
 info "Assets (logo + favicon)..."
@@ -148,10 +176,18 @@ if [ -d "$THEME_DIR/database/migrations" ]; then
     for m in "$THEME_DIR/database/migrations/"*.php; do
         [ -e "$m" ] || continue
         dst="$PANEL_DIR/database/migrations/$(basename "$m")"
+        case "$(basename "$m")" in
+            2026_02_18_020322_add_expires_at_to_servers_table.php|2026_06_03_000000_create_announcements_table.php)
+                cp -f "$m" "$dst"
+                MIG_COUNT=$((MIG_COUNT+1))
+                ;;
+            *)
         if [ ! -f "$dst" ]; then
             cp -f "$m" "$dst"
             MIG_COUNT=$((MIG_COUNT+1))
         fi
+                ;;
+        esac
     done
 fi
 ok "→ $MIG_COUNT migration baru disalin"
@@ -176,6 +212,65 @@ if [ ! -f "$PANEL_DIR/vendor/autoload.php" ]; then
     [ $COMPOSER_EXIT -eq 0 ] && [ -f "$PANEL_DIR/vendor/autoload.php" ] \
         && ok "Composer dependencies terinstall." \
         || err "composer install gagal. Coba manual: cd $PANEL_DIR && composer install --no-dev"
+fi
+
+php artisan optimize:clear >/dev/null 2>&1 || true
+
+mysql_query() {
+    [ -n "$DB_PASS" ] || return 1
+    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" "$@"
+}
+
+column_exists() {
+    local table="$1" column="$2"
+    mysql_query -N -B -e "SHOW COLUMNS FROM \`$table\` LIKE '$column';" 2>/dev/null | grep -q .
+}
+
+table_exists() {
+    local table="$1"
+    mysql_query -N -B -e "SHOW TABLES LIKE '$table';" 2>/dev/null | grep -q .
+}
+
+add_column_if_missing() {
+    local table="$1" column="$2" ddl="$3"
+    if table_exists "$table" && ! column_exists "$table" "$column"; then
+        mysql_query -e "ALTER TABLE \`$table\` ADD COLUMN $ddl;" >/dev/null 2>&1 \
+            && ok "Kolom $table.$column ditambahkan" \
+            || warn "Gagal menambah kolom $table.$column — lanjut, migration Laravel akan coba lagi."
+    fi
+}
+
+mark_migration_done() {
+    local migration="$1"
+    mysql_query -e "CREATE TABLE IF NOT EXISTS migrations (id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, migration VARCHAR(255) NOT NULL, batch INT NOT NULL);" >/dev/null 2>&1 || true
+    local batch
+    batch="$(mysql_query -N -B -e "SELECT COALESCE(MAX(batch),0)+1 FROM migrations;" 2>/dev/null || echo 1)"
+    mysql_query -e "INSERT INTO migrations (migration, batch) SELECT '$migration', ${batch:-1} WHERE NOT EXISTS (SELECT 1 FROM migrations WHERE migration='$migration');" >/dev/null 2>&1 || true
+}
+
+step "STEP 4A  Repair schema sebelum migrate"
+if command -v mysql >/dev/null && mysql_query -e "SELECT 1;" >/dev/null 2>&1; then
+    if table_exists servers && column_exists servers expires_at; then
+        mark_migration_done "2026_02_18_020322_add_expires_at_to_servers_table"
+        ok "Migration expires_at ditandai aman."
+    fi
+
+    if table_exists announcements; then
+        add_column_if_missing announcements title "title VARCHAR(255) NOT NULL DEFAULT 'Announcement' AFTER id"
+        add_column_if_missing announcements content "content TEXT NULL AFTER title"
+        add_column_if_missing announcements type "type VARCHAR(20) NOT NULL DEFAULT 'info' AFTER content"
+        add_column_if_missing announcements priority "priority TINYINT NOT NULL DEFAULT 2 AFTER type"
+        add_column_if_missing announcements is_active "is_active TINYINT(1) NOT NULL DEFAULT 0 AFTER priority"
+        add_column_if_missing announcements target_display "target_display JSON NULL AFTER is_active"
+        add_column_if_missing announcements expires_at "expires_at TIMESTAMP NULL AFTER target_display"
+        add_column_if_missing announcements created_by "created_by INT UNSIGNED NULL AFTER expires_at"
+        add_column_if_missing announcements created_at "created_at TIMESTAMP NULL AFTER created_by"
+        add_column_if_missing announcements updated_at "updated_at TIMESTAMP NULL AFTER created_at"
+        mysql_query -e "CREATE TABLE IF NOT EXISTS announcement_reads (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, user_id INT UNSIGNED NOT NULL, announcement_id BIGINT UNSIGNED NOT NULL, read_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY announcement_reads_user_announcement_unique (user_id, announcement_id)) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >/dev/null 2>&1 || warn "Gagal memastikan tabel announcement_reads."
+        ok "Schema announcements/announcement_reads aman."
+    fi
+else
+    warn "MySQL tidak bisa dicek otomatis — lanjut ke php artisan migrate."
 fi
 
 set +e
@@ -270,6 +365,9 @@ else
     err "Build gagal/timeout (exit $BUILD_EXIT). Cek log: $BUILD_LOG. Restore: cd /var/www && rm -rf pterodactyl && tar -xzf $BK_FILES"
 fi
 
+[ -f "$PANEL_DIR/public/assets/manifest.json" ] || err "Build selesai tapi public/assets/manifest.json tidak ada — dashboard/login tidak akan load tema. Cek log: $BUILD_LOG"
+ok "Manifest frontend tersedia."
+
 # ─── Step 6: Clear cache + permission ────────────────────────────────────────
 step "STEP 6  Clear cache + permission"
 cd "$PANEL_DIR"
@@ -287,17 +385,15 @@ ok "Permission set ke www-data."
 step "STEP 6.5  Setup announcement banner (safe mode)"
 cd "$PANEL_DIR"
 
-DB_HOST_ENV=$(grep -E '^DB_HOST='     .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
-DB_PORT_ENV=$(grep -E '^DB_PORT='     .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
-DB_NAME_ENV=$(grep -E '^DB_DATABASE=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
-DB_USER_ENV=$(grep -E '^DB_USERNAME=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
-DB_PASS_ENV=$(grep -E '^DB_PASSWORD=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'"')
-DB_HOST_ENV=${DB_HOST_ENV:-127.0.0.1}
-DB_PORT_ENV=${DB_PORT_ENV:-3306}
+DB_HOST_ENV="${DB_HOST:-127.0.0.1}"
+DB_PORT_ENV="${DB_PORT:-3306}"
+DB_NAME_ENV="${DB_NAME:-panel}"
+DB_USER_ENV="${DB_USER:-pterodactyl}"
+DB_PASS_ENV="${DB_PASS:-}"
 
-MYSQL_CMD=(mysql -h "$DB_HOST_ENV" -P "$DB_PORT_ENV" -u "${DB_USER_ENV:-$DB_USER}")
+MYSQL_CMD=(mysql -h "$DB_HOST_ENV" -P "$DB_PORT_ENV" -u "$DB_USER_ENV")
 [ -n "$DB_PASS_ENV" ] && MYSQL_CMD+=(-p"$DB_PASS_ENV")
-MYSQL_CMD+=("${DB_NAME_ENV:-$DB_NAME}")
+MYSQL_CMD+=("$DB_NAME_ENV")
 
 HAS_TABLE=$("${MYSQL_CMD[@]}" -N -B -e "SHOW TABLES LIKE 'announcements';" 2>/dev/null | wc -l)
 if [ "${HAS_TABLE:-0}" -eq 0 ]; then
@@ -325,7 +421,7 @@ else
             ok "Wrapper sudah include partials.announcements — skip."
         else
             cp -f "$WRAPPER" "$WRAPPER.bak-ann-$TS"
-            sed -i '0,/<div id="app"/s//@include('"'"'partials.announcements'"'"')\n        <div id="app"/' "$WRAPPER" \
+            sed -i "0,/<div id=\"app\"/s//@include('partials.announcements')\\n        <div id=\"app\"/" "$WRAPPER" \
                 && ok "Wrapper di-inject @include('partials.announcements')." \
                 || warn "Gagal inject wrapper — cek manual: $WRAPPER"
         fi

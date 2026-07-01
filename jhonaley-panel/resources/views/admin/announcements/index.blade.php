@@ -40,7 +40,7 @@
                                 <td><strong>{{ $announcement->title }}</strong></td>
                                 <td>
                                     <span class="label label-{{ $announcement->type === 'critical' ? 'danger' : ($announcement->type === 'warning' ? 'warning' : 'info') }}">
-                                        {{ strtoupper($announcement->type) }}
+                                        {{ strtoupper($announcement->type ?: 'info') }}
                                     </span>
                                 </td>
                                 <td>
@@ -50,8 +50,8 @@
                                         <span class="label label-default">Inactive</span>
                                     @endif
                                 </td>
-                                <td>{{ $announcement->author->username }}</td>
-                                <td>{{ $announcement->created_at->diffForHumans() }}</td>
+                                <td>{{ optional($announcement->author)->username ?: 'System' }}</td>
+                                <td>{{ optional($announcement->created_at)->diffForHumans() ?: '-' }}</td>
                                 <td class="text-right">
                                     <form action="{{ route('admin.announcements.delete', $announcement->id) }}" method="POST" style="display:inline;">
                                         @csrf

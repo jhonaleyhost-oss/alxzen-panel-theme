@@ -39,13 +39,11 @@ interface Props {
 }
 
 export default ({ displayLocation }: Props) => {
-    const [announcements, setAnnouncements] = useState<Announcement[]>([]);
     const [visible, setVisible] = useState<Announcement[]>([]);
 
     useEffect(() => {
         getAnnouncements().then((data) => {
-            const filtered = data.filter((a) => a.target_display.includes(displayLocation));
-            setAnnouncements(filtered);
+            const filtered = data.filter((a) => Array.isArray(a.target_display) && a.target_display.includes(displayLocation));
             setVisible(filtered);
         }).catch(console.error);
     }, [displayLocation]);
