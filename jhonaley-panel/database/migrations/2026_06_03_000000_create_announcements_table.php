@@ -11,6 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (!Schema::hasTable('announcements')) {
         Schema::create('announcements', function (Blueprint $table) {
             $table->id();
             $table->string('title', 255);
@@ -25,7 +26,9 @@ return new class extends Migration
 
             $table->foreign('created_by')->references('id')->on('users')->onDelete('cascade');
         });
+        }
 
+        if (!Schema::hasTable('announcement_reads')) {
         Schema::create('announcement_reads', function (Blueprint $table) {
             $table->id();
             $table->unsignedInteger('user_id');
@@ -37,6 +40,7 @@ return new class extends Migration
             
             $table->unique(['user_id', 'announcement_id']);
         });
+        }
     }
 
     /**
